@@ -1,84 +1,62 @@
-"""Streamlit interface for Plant Leaf Disease Classification."""
-
 import json
 import tempfile
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 from PIL import Image
 
 from src.config import (
     FEATURE_COLUMNS,
-    K_COMPARISON_CSV,
-    METRICS_JSON,
+    MODEL_COMPARISON_JSON,
+    KNN_CONFUSION_MATRIX,
+    RANDOM_FOREST_CONFUSION_MATRIX,
+    LINEAR_SVM_CONFUSION_MATRIX,
+    RBF_SVM_CONFUSION_MATRIX,
 )
 from src.predict import predict_image
 
 
-# =========================================================
-# PAGE CONFIGURATION
-# =========================================================
+# ============================================================
+# PAGE CONFIG
+# ============================================================
 
 st.set_page_config(
-    page_title="Plant Leaf Disease Classification",
+    page_title="Plant Leaf Disease Detection",
     page_icon="🌿",
     layout="wide",
 )
 
 
-# =========================================================
+# ============================================================
 # HEADER
-# =========================================================
+# ============================================================
 
-st.title("🌿 Plant Leaf Disease Classification")
-
-st.caption("Machine Vision & Statistical Learning")
-
-st.write(
-    "A classical computer-vision and statistical-learning pipeline using "
-    "LAB color features, K-Means segmentation, GLCM texture features, and KNN."
+st.title("🌿 Plant Leaf Disease Detection")
+st.caption(
+    "Classical Computer Vision + Machine Learning"
 )
 
+st.write(
+    "Upload a plant leaf image to identify the plant condition "
+    "using the trained machine-learning models."
+)
 
-# =========================================================
-# SIDEBAR
-# =========================================================
-
-with st.sidebar:
-    st.header("Project Information")
-
-    st.metric("Classes", "38")
-    st.metric("Features", "12")
-
-    st.write("**Algorithm:** K-Nearest Neighbours (KNN)")
-    st.write("**Segmentation:** K-Means (K=3)")
-    st.write("**Feature space:** LAB color moments + GLCM")
-    st.write("**Dataset:** Color images only")
-
-    st.divider()
-
-    st.subheader("Methodology")
-
-    st.write(
-        "Image → 256×256 → LAB → K-Means → leaf mask → "
-        "9 color + 3 texture features → StandardScaler → KNN"
-    )
+st.divider()
 
 
-# =========================================================
-# IMAGE UPLOAD
-# =========================================================
+# ============================================================
+# UPLOAD
+# ============================================================
+
+st.subheader("📷 Upload Leaf Image")
 
 uploaded = st.file_uploader(
-    "Upload a plant leaf image",
+    "Choose an image",
     type=["jpg", "jpeg", "png", "bmp", "webp"],
 )
 
-
-# =========================================================
-# PREDICTION
-# =========================================================
 
 if uploaded is not None:
 
@@ -86,243 +64,432 @@ if uploaded is not None:
 
     try:
 
-        # -------------------------------------------------
-        # Display the ORIGINAL uploaded image
-        # -------------------------------------------------
+        # ----------------------------------------------------
+        # Input image
+        # ----------------------------------------------------
 
         original_image = Image.open(uploaded).convert("RGB")
 
-        st.subheader("Input Image")
+        left, right = st.columns([1, 1])
 
-        st.image(
-            original_image,
-            caption=f"Uploaded Image: {uploaded.name}",
-            use_container_width=True,
-        )
-
-        # -------------------------------------------------
-        # Save ORIGINAL uploaded bytes without
-        # re-encoding through PIL.
-        # -------------------------------------------------
-
-        suffix = Path(uploaded.name).suffix.lower()
-
-        if suffix not in [".jpg", ".jpeg", ".png", ".bmp", ".webp"]:
-            suffix = ".jpg"
-
-        with tempfile.NamedTemporaryFile(
-            suffix=suffix,
-            delete=False,
-        ) as temp_file:
-
-            temp_file.write(uploaded.getvalue())
-            temp_path = Path(temp_file.name)
-
-        # -------------------------------------------------
-        # RUN THE EXACT SAME PREDICTION PIPELINE
-        # -------------------------------------------------
-
-        with st.spinner(
-            "Processing image through preprocessing, "
-            "segmentation, feature extraction and KNN..."
-        ):
-
-            result = predict_image(temp_path)
-
-        st.success("Prediction completed successfully.")
-
-
-        # =================================================
-        # PROCESSING RESULTS
-        # =================================================
-
-        st.divider()
-
-        st.subheader("Image Processing Pipeline")
-
-        c1, c2, c3 = st.columns(3)
-
-        with c1:
+        with left:
             st.image(
-                result["original_rgb"],
-                caption="Original Image",
+                original_image,
+                caption=uploaded.name,
                 use_container_width=True,
             )
 
-        with c2:
-            st.image(
-                result["processed_rgb"],
-                caption="Processed (256×256)",
+        with right:
+
+            st.write("")
+
+            predict_button = st.button(
+                "🔍 Predict Disease",
+                type="primary",
                 use_container_width=True,
             )
 
-        with c3:
-            st.image(
-                result["segmented_rgb"],
-                caption="K-Means Segmentation",
-                use_container_width=True,
-            )
+        # ----------------------------------------------------
+        # Prediction
+        # ----------------------------------------------------
 
+        if predict_button:
 
-        # -------------------------------------------------
-        # MASK RESULTS
-        # -------------------------------------------------
+            suffix = Path(uploaded.name).suffix.lower()
 
-        c4, c5 = st.columns(2)
+            if suffix not in {
+                ".jpg",
+                ".jpeg",
+                ".png",
+                ".bmp",
+                ".webp",
+            }:
+                suffix = ".jpg"
 
-        with c4:
-            st.image(
-                result["leaf_mask"],
-                caption="Leaf Mask",
-                clamp=True,
-                use_container_width=True,
-            )
+            with tempfile.NamedTemporaryFile(
+                suffix=suffix,
+                delete=False,
+            ) as temp_file:
 
-        with c5:
-            st.image(
-                result["masked_leaf"],
-                caption="Masked Leaf",
-                use_container_width=True,
-            )
+                temp_file.write(uploaded.getvalue())
+                temp_path = Path(temp_file.name)
 
+            with st.spinner(
+                "Processing image and predicting disease..."
+            ):
 
-        # =================================================
-        # PREDICTION RESULT
-        # =================================================
+                result = predict_image(temp_path)
 
-        st.divider()
+            predictions = result["predictions"]
 
-        st.subheader("🔍 Prediction Result")
+            # ------------------------------------------------
+            # Determine evaluation-best model
+            # ------------------------------------------------
 
-        p1, p2, p3 = st.columns(3)
+            best_model = "RBF SVM"
+            best_accuracy = 0.8342
 
-        with p1:
-            st.metric(
-                "Plant",
-                result["plant"],
-            )
+            if MODEL_COMPARISON_JSON.exists():
 
-        with p2:
-            st.metric(
-                "Condition",
-                result["condition"],
-            )
+                try:
 
-        with p3:
-            st.metric(
-                "Status",
-                result["status"],
-            )
+                    comparison_data = json.loads(
+                        MODEL_COMPARISON_JSON.read_text(
+                            encoding="utf-8"
+                        )
+                    )
 
-        st.info(
-            f"**Predicted Class:** {result['class_name']}"
-        )
+                    best_model = comparison_data.get(
+                        "best_model",
+                        "RBF SVM",
+                    )
 
+                    best_accuracy = comparison_data.get(
+                        "best_accuracy",
+                        0.8342,
+                    )
 
-        # =================================================
-        # FEATURE VECTOR
-        # =================================================
+                except Exception:
+                    pass
 
-        st.divider()
+            best_prediction = predictions[best_model]
 
-        st.subheader("📊 12-Dimensional Feature Vector")
+            # =================================================
+            # MAIN RESULT
+            # =================================================
 
-        feature_vector = result["feature_vector"]
+            st.divider()
+            st.subheader("🌿 Prediction Result")
 
-        feature_df = pd.DataFrame(
-            [feature_vector],
-            columns=FEATURE_COLUMNS,
-        )
+            result_box = st.container(border=True)
 
-        st.dataframe(
-            feature_df,
-            use_container_width=True,
-        )
+            with result_box:
 
+                c1, c2, c3 = st.columns(3)
 
-        # =================================================
-        # MODEL INFORMATION
-        # =================================================
+                with c1:
+                    st.metric(
+                        "Plant",
+                        best_prediction["plant"],
+                    )
 
-        st.divider()
+                with c2:
+                    st.metric(
+                        "Condition",
+                        best_prediction["condition"],
+                    )
 
-        st.subheader("🤖 Model Information")
+                with c3:
+                    st.metric(
+                        "Status",
+                        best_prediction["status"],
+                    )
 
-        if METRICS_JSON.exists():
-
-            metrics = json.loads(
-                METRICS_JSON.read_text(
-                    encoding="utf-8"
-                )
-            )
-
-            m1, m2, m3, m4 = st.columns(4)
-
-            with m1:
-                st.metric(
-                    "Best K",
-                    str(metrics["best_k"]),
+                st.markdown(
+                    f"**Predicted Class:** "
+                    f"`{best_prediction['class_name']}`"
                 )
 
-            with m2:
-                st.metric(
-                    "Accuracy",
-                    f"{metrics['accuracy']:.2%}",
+                confidence = best_prediction["confidence"]
+
+                if confidence is not None:
+
+                    st.progress(
+                        min(max(confidence, 0.0), 1.0)
+                    )
+
+                    st.write(
+                        f"Model confidence: "
+                        f"**{confidence:.2%}**"
+                    )
+
+                st.caption(
+                    f"Final model: {best_model} "
+                    f"(test accuracy: {best_accuracy:.2%})"
                 )
 
-            with m3:
-                st.metric(
-                    "Precision",
-                    f"{metrics['precision_weighted']:.2%}",
+            # =================================================
+            # OTHER MODEL PREDICTIONS
+            # =================================================
+
+            with st.expander(
+                "📊 Compare Predictions from All Models"
+            ):
+
+                rows = []
+
+                for model_name, prediction in predictions.items():
+
+                    rows.append(
+                        {
+                            "Model": model_name,
+                            "Predicted Class":
+                                prediction["class_name"],
+                            "Plant":
+                                prediction["plant"],
+                            "Condition":
+                                prediction["condition"],
+                            "Confidence":
+                                (
+                                    f"{prediction['confidence']:.2%}"
+                                    if prediction["confidence"]
+                                    is not None
+                                    else "N/A"
+                                ),
+                        }
+                    )
+
+                st.dataframe(
+                    pd.DataFrame(rows),
+                    use_container_width=True,
+                    hide_index=True,
                 )
 
-            with m4:
-                st.metric(
-                    "F1-score",
-                    f"{metrics['f1_weighted']:.2%}",
+            # =================================================
+            # IMAGE PROCESSING
+            # =================================================
+
+            with st.expander(
+                "🔍 View Image Processing Pipeline"
+            ):
+
+                st.write(
+                    "The uploaded image passes through the "
+                    "following preprocessing and segmentation steps."
                 )
 
-        else:
+                c1, c2 = st.columns(2)
 
-            st.warning(
-                "Final evaluation metrics are not available yet. "
-                "Train the model first."
-            )
+                with c1:
+                    st.image(
+                        result["original_rgb"],
+                        caption="Original Image",
+                        use_container_width=True,
+                    )
 
+                with c2:
+                    st.image(
+                        result["processed_rgb"],
+                        caption="Resized — 256 × 256",
+                        use_container_width=True,
+                    )
 
-        # =================================================
-        # DEBUG / VERIFICATION
-        # =================================================
+                st.markdown("**RGB → LAB**")
 
-        with st.expander("Prediction Verification"):
+                c1, c2, c3 = st.columns(3)
 
-            st.write(
-                "The Streamlit interface uses the same "
-                "`predict_image()` function as the command-line "
-                "prediction system."
-            )
+                with c1:
+                    st.image(
+                        result["lab"][:, :, 0],
+                        caption="L* Channel",
+                        clamp=True,
+                        use_container_width=True,
+                    )
 
-            st.write(
-                "**Predicted class returned by model:**"
-            )
+                with c2:
+                    st.image(
+                        result["lab"][:, :, 1],
+                        caption="a* Channel",
+                        clamp=True,
+                        use_container_width=True,
+                    )
 
-            st.code(
-                result["class_name"]
-            )
+                with c3:
+                    st.image(
+                        result["lab"][:, :, 2],
+                        caption="b* Channel",
+                        clamp=True,
+                        use_container_width=True,
+                    )
 
-            st.write(
-                "**Number of extracted features:**",
-                len(result["feature_vector"]),
-            )
+                st.markdown("**K-Means Segmentation**")
 
-            st.write(
-                "**Feature order:**"
-            )
+                c1, c2 = st.columns(2)
 
-            st.code(
-                ", ".join(FEATURE_COLUMNS)
-            )
+                with c1:
+                    st.image(
+                        result["segmented_rgb"],
+                        caption="Segmented Image",
+                        use_container_width=True,
+                    )
 
+                with c2:
+                    st.image(
+                        result["labels"],
+                        caption="Cluster Map",
+                        clamp=True,
+                        use_container_width=True,
+                    )
+
+                st.caption(
+                    f"K = 3 | Background cluster = "
+                    f"{result['background_cluster']}"
+                )
+
+                st.markdown("**Leaf Extraction**")
+
+                c1, c2 = st.columns(2)
+
+                with c1:
+                    st.image(
+                        result["leaf_mask"],
+                        caption="Leaf Mask",
+                        clamp=True,
+                        use_container_width=True,
+                    )
+
+                with c2:
+                    st.image(
+                        result["masked_leaf"],
+                        caption="Masked Leaf",
+                        use_container_width=True,
+                    )
+
+            # =================================================
+            # FEATURES
+            # =================================================
+
+            with st.expander(
+                "🧬 View Extracted Features"
+            ):
+
+                feature_df = pd.DataFrame(
+                    {
+                        "Feature": FEATURE_COLUMNS,
+                        "Value": result["feature_vector"],
+                    }
+                )
+
+                feature_df["Value"] = (
+                    feature_df["Value"]
+                    .astype(float)
+                    .round(6)
+                )
+
+                st.dataframe(
+                    feature_df,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                st.caption(
+                    "9 LAB color-moment features + "
+                    "3 GLCM texture features = 12 features."
+                )
+
+            # =================================================
+            # MODEL EVALUATION
+            # =================================================
+
+            with st.expander(
+                "📈 View Model Evaluation"
+            ):
+
+                if MODEL_COMPARISON_JSON.exists():
+
+                    try:
+
+                        comparison_data = json.loads(
+                            MODEL_COMPARISON_JSON.read_text(
+                                encoding="utf-8"
+                            )
+                        )
+
+                        rows = []
+
+                        for model_name, values in (
+                            comparison_data["models"].items()
+                        ):
+
+                            rows.append(
+                                {
+                                    "Model": model_name,
+                                    "CV Accuracy":
+                                        f"{values['cv_accuracy']:.2%}",
+                                    "Test Accuracy":
+                                        f"{values['accuracy']:.2%}",
+                                    "Precision":
+                                        f"{values['precision']:.2%}",
+                                    "Recall":
+                                        f"{values['recall']:.2%}",
+                                    "F1-score":
+                                        f"{values['f1_score']:.2%}",
+                                }
+                            )
+
+                        st.dataframe(
+                            pd.DataFrame(rows),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+                        st.success(
+                            f"Evaluation-best model: "
+                            f"{comparison_data['best_model']} — "
+                            f"{comparison_data['best_accuracy']:.2%} "
+                            f"test accuracy"
+                        )
+
+                    except Exception as exc:
+
+                        st.warning(
+                            f"Could not load model evaluation: {exc}"
+                        )
+
+                else:
+
+                    st.info(
+                        "Model comparison results are not available."
+                    )
+
+            # =================================================
+            # CONFUSION MATRICES
+            # =================================================
+
+            with st.expander(
+                "📊 View Confusion Matrices"
+            ):
+
+                confusion_files = {
+                    "KNN": KNN_CONFUSION_MATRIX,
+                    "Random Forest":
+                        RANDOM_FOREST_CONFUSION_MATRIX,
+                    "Linear SVM":
+                        LINEAR_SVM_CONFUSION_MATRIX,
+                    "RBF SVM":
+                        RBF_SVM_CONFUSION_MATRIX,
+                }
+
+                tabs = st.tabs(
+                    list(confusion_files.keys())
+                )
+
+                for tab, (
+                    model_name,
+                    path,
+                ) in zip(
+                    tabs,
+                    confusion_files.items(),
+                ):
+
+                    with tab:
+
+                        if path.exists():
+
+                            st.image(
+                                str(path),
+                                caption=(
+                                    f"{model_name} "
+                                    "Confusion Matrix"
+                                ),
+                                use_container_width=True,
+                            )
+
+                        else:
+
+                            st.warning(
+                                "Confusion matrix not found."
+                            )
 
     except Exception as exc:
 
@@ -332,12 +499,7 @@ if uploaded is not None:
 
         st.exception(exc)
 
-
     finally:
-
-        # -------------------------------------------------
-        # Remove temporary uploaded file
-        # -------------------------------------------------
 
         if temp_path is not None:
 
@@ -347,38 +509,31 @@ if uploaded is not None:
                 pass
 
 
-# =========================================================
-# ABOUT PROJECT
-# =========================================================
+# ============================================================
+# FOOTER / ABOUT
+# ============================================================
 
 st.divider()
 
-with st.expander("About the Project"):
+with st.expander("ℹ️ About This Project"):
 
     st.write(
-        "This MSc project demonstrates the integration of "
-        "unsupervised and supervised learning. K-Means performs "
-        "unsupervised color-based image segmentation. Color moments "
-        "and GLCM describe the segmented leaf. KNN then performs "
-        "supervised 38-class plant health/disease classification."
+        """
+        This project classifies plant leaf diseases using
+        classical computer vision and machine learning.
+
+        Pipeline:
+        Image → Resize → LAB → K-Means Segmentation
+        → Leaf Mask → 12 Features → ML Classification
+        """
     )
 
     st.write(
-        "The project deliberately uses handcrafted computer-vision "
-        "features rather than CNNs, transfer learning, TensorFlow, "
-        "or PyTorch."
+        """
+        Models evaluated:
+        KNN, Random Forest, Linear SVM and RBF SVM.
+
+        The current evaluation identifies RBF SVM as the
+        best-performing model with 83.42% test accuracy.
+        """
     )
-
-
-# =========================================================
-# K-VALUE EXPERIMENT
-# =========================================================
-
-if K_COMPARISON_CSV.exists():
-
-    with st.expander("K-value Experiment"):
-
-        st.dataframe(
-            pd.read_csv(K_COMPARISON_CSV),
-            use_container_width=True,
-        )

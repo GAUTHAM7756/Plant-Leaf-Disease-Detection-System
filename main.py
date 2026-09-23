@@ -1,59 +1,118 @@
-"""Command-line entry point for the complete project."""
-
 import argparse
 from pathlib import Path
 
-from src.config import DATASET_DIR, FEATURE_CSV
-from src.create_features import create_feature_dataset
-from src.dataset import print_dataset_info, validate_dataset
+from src.config import FEATURE_CSV
 from src.predict import predict_image
-from src.train import train_and_evaluate
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Plant Leaf Disease Classification project."
+def predict_command(image):
+    result = predict_image(image)
+
+    print()
+    print("Prediction Result")
+    print("=" * 40)
+
+    print(
+        f"Predicted Class: "
+        f"{result['class_name']}"
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
 
-    info = subparsers.add_parser("dataset-info")
-    info.add_argument("--dataset", type=Path, default=DATASET_DIR)
+    print(
+        f"Plant: "
+        f"{result['plant']}"
+    )
 
-    features = subparsers.add_parser("features")
-    features.add_argument("--dataset", type=Path, default=DATASET_DIR)
-    features.add_argument("--output", type=Path, default=FEATURE_CSV)
-    features.add_argument("--max-images", type=int, default=None)
-    features.add_argument("--no-resume", action="store_true")
+    print(
+        f"Condition: "
+        f"{result['condition']}"
+    )
 
-    train = subparsers.add_parser("train")
-    train.add_argument("--features", type=Path, default=FEATURE_CSV)
+    print(
+        f"Status: "
+        f"{result['status']}"
+    )
 
-    predict = subparsers.add_parser("predict")
-    predict.add_argument("image", type=Path)
+    if result["confidence"] is not None:
+        print(
+            f"Confidence: "
+            f"{result['confidence']:.2%}"
+        )
+
+
+def main():
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Plant Leaf Disease Classification"
+        )
+    )
+
+    subparsers = parser.add_subparsers(
+        dest="command"
+    )
+
+    subparsers.add_parser(
+        "features",
+        help="Show feature CSV information",
+    )
+
+    predict_parser = subparsers.add_parser(
+        "predict",
+        help="Predict a leaf image",
+    )
+
+    predict_parser.add_argument(
+        "image",
+        type=Path,
+    )
 
     args = parser.parse_args()
 
-    if args.command == "dataset-info":
-        print_dataset_info(args.dataset)
+    if args.command == "features":
 
-    elif args.command == "features":
-        validate_dataset(args.dataset, expected_classes=None)
-        create_feature_dataset(
-            args.dataset,
-            args.output,
-            max_images=args.max_images,
-            resume=not args.no_resume,
+        if not FEATURE_CSV.exists():
+            print(
+                f"Feature CSV not found:\n"
+                f"{FEATURE_CSV}"
+            )
+            return
+
+        import pandas as pd
+
+        df = pd.read_csv(
+            FEATURE_CSV
         )
 
-    elif args.command == "train":
-        train_and_evaluate(args.features)
+        print(
+            f"Feature CSV: {FEATURE_CSV}"
+        )
+
+        print(
+            f"Samples: {len(df):,}"
+        )
+
+        print(
+            f"Columns: {len(df.columns)}"
+        )
+
+        print(
+            f"Classes: {df['class'].nunique()}"
+        )
 
     elif args.command == "predict":
-        result = predict_image(args.image)
-        print(f"Predicted Class: {result['class_name']}")
-        print(f"Plant: {result['plant']}")
-        print(f"Condition: {result['condition']}")
-        print(f"Status: {result['status']}")
+
+        if not args.image.exists():
+            raise FileNotFoundError(
+                f"Image not found:\n"
+                f"{args.image}"
+            )
+
+        predict_command(
+            args.image
+        )
+
+    else:
+        parser.print_help()
 
 
 if __name__ == "__main__":

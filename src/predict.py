@@ -1,96 +1,370 @@
-"""Single-image prediction using the persisted scaler, encoder, and KNN model."""
+"""
+Prediction pipeline for Plant Leaf Disease Classification.
 
-from pathlib import Path
+One image is processed through:
+Image -> Resize -> LAB -> K-Means -> Leaf Mask
+-> 12 Features -> KNN / Random Forest / Linear SVM / RBF SVM
+"""
 
 import joblib
 import numpy as np
 
-from .config import FEATURE_COLUMNS, KNN_MODEL, LABEL_ENCODER, SCALER
+from .config import (
+    FEATURE_COLUMNS,
+
+    KNN_MODEL,
+    KNN_SCALER,
+
+    RANDOM_FOREST_MODEL,
+
+    LINEAR_SVM_MODEL,
+    LINEAR_SVM_SCALER,
+
+    RBF_SVM_MODEL,
+    RBF_SVM_SCALER,
+
+    LABEL_ENCODER,
+)
+
 from .features import extract_features
 from .preprocessing import preprocess_image
 from .segmentation import segment_leaf
 
 
-def _load_models():
-    """Load all persisted prediction artifacts."""
-    for path in (KNN_MODEL, SCALER, LABEL_ENCODER):
+# ============================================================
+# LOAD ALL MODELS
+# ============================================================
+
+def load_models():
+
+    paths = [
+        KNN_MODEL,
+        KNN_SCALER,
+        RANDOM_FOREST_MODEL,
+        LINEAR_SVM_MODEL,
+        LINEAR_SVM_SCALER,
+        RBF_SVM_MODEL,
+        RBF_SVM_SCALER,
+        LABEL_ENCODER,
+    ]
+
+    for path in paths:
+
         if not path.exists():
+
             raise FileNotFoundError(
-                f"Required model file is missing: {path}. Run training first."
+                f"Required model file is missing:\n{path}\n\n"
+                "Run train.py first."
             )
 
-    return (
-        joblib.load(KNN_MODEL),
-        joblib.load(SCALER),
-        joblib.load(LABEL_ENCODER),
+    return {
+        "KNN": (
+            joblib.load(KNN_MODEL),
+            joblib.load(KNN_SCALER),
+        ),
+
+        "Random Forest": (
+            joblib.load(RANDOM_FOREST_MODEL),
+            None,
+        ),
+
+        "Linear SVM": (
+            joblib.load(LINEAR_SVM_MODEL),
+            joblib.load(LINEAR_SVM_SCALER),
+        ),
+
+        "RBF SVM": (
+            joblib.load(RBF_SVM_MODEL),
+            joblib.load(RBF_SVM_SCALER),
+        ),
+    }, joblib.load(LABEL_ENCODER)
+
+
+# ============================================================
+# CLASS NAME PARSER
+# ============================================================
+
+def parse_class_name(class_name):
+
+    parts = class_name.split(
+        "___",
+        1,
     )
 
+    plant = parts[0].replace(
+        "_",
+        " ",
+    ).strip()
 
-def parse_class_name(class_name: str) -> dict:
-    """Convert a dataset class name into plant, condition, and status."""
-    parts = class_name.split("___", 1)
-    plant = parts[0].replace("_", " ").strip()
-    condition = parts[1].replace("_", " ").strip() if len(parts) == 2 else "Unknown"
+    if len(parts) == 2:
 
-    healthy = condition.lower() in {"healthy", "health"}
+        condition = parts[1].replace(
+            "_",
+            " ",
+        ).strip()
+
+    else:
+
+        condition = "Unknown"
+
+    healthy = condition.lower() in {
+        "healthy",
+        "health",
+    }
+
     return {
         "class_name": class_name,
+
         "plant": plant,
-        "condition": "Healthy" if healthy else condition,
-        "status": "Healthy" if healthy else "Disease",
+
+        "condition": (
+            "Healthy"
+            if healthy
+            else condition
+        ),
+
+        "status": (
+            "Healthy"
+            if healthy
+            else "Disease"
+        ),
     }
 
 
-def predict_image(image_path: str | Path) -> dict:
-    """Run preprocessing, segmentation, feature extraction, and KNN prediction."""
-    model, scaler, label_encoder = _load_models()
+# ============================================================
+# PREDICT ONE IMAGE
+# ============================================================
 
-    processed = preprocess_image(image_path)
-    segmentation = segment_leaf(processed["lab"])
+def predict_image(image_path):
 
-    vector = extract_features(
+    # --------------------------------------------------------
+    # Load models
+    # --------------------------------------------------------
+
+    models, label_encoder = load_models()
+
+
+    # --------------------------------------------------------
+    # IMAGE PREPROCESSING
+    # --------------------------------------------------------
+
+    processed = preprocess_image(
+        image_path
+    )
+
+
+    # --------------------------------------------------------
+    # K-MEANS SEGMENTATION
+    # --------------------------------------------------------
+
+    segmentation = segment_leaf(
+        processed["lab"]
+    )
+
+
+    # --------------------------------------------------------
+    # FEATURE EXTRACTION
+    # --------------------------------------------------------
+
+    feature_vector = extract_features(
         processed["lab"],
         processed["resized_rgb"],
         segmentation["leaf_mask"],
     )
-    if vector.shape != (12,):
+
+
+    if feature_vector.shape != (12,):
+
         raise ValueError(
-            f"Prediction requires exactly 12 features; received {vector.shape}."
+            f"Expected 12 features, "
+            f"received {feature_vector.shape}"
         )
 
-    scaled = scaler.transform(vector.reshape(1, -1))
-    encoded_prediction = model.predict(scaled)[0]
-    class_name = label_encoder.inverse_transform([encoded_prediction])[0]
 
-    probabilities = None
-    if hasattr(model, "predict_proba"):
-        probabilities = model.predict_proba(scaled)[0]
+    # --------------------------------------------------------
+    # PREDICTIONS FROM ALL MODELS
+    # --------------------------------------------------------
 
-    result = parse_class_name(str(class_name))
-    result.update({
-        "original_rgb": processed["original_rgb"],
-        "processed_rgb": processed["resized_rgb"],
-        "segmented_rgb": segmentation["segmented_rgb"],
-        "leaf_mask": segmentation["leaf_mask"],
-        "masked_leaf": segmentation["masked_leaf"],
-        "feature_vector": vector,
-        "feature_names": FEATURE_COLUMNS,
-        "scaled_features": scaled[0],
-        "probabilities": probabilities,
-        "background_cluster": segmentation["background_cluster"],
-    })
-    return result
+    predictions = {}
 
+    for model_name, (
+        model,
+        scaler,
+    ) in models.items():
+
+        # Scale when required
+        if scaler is not None:
+
+            X = scaler.transform(
+                feature_vector.reshape(1, -1)
+            )
+
+        else:
+
+            X = feature_vector.reshape(
+                1,
+                -1,
+            )
+
+
+        # Prediction
+        encoded_prediction = model.predict(
+            X
+        )[0]
+
+
+        class_name = label_encoder.inverse_transform(
+            [encoded_prediction]
+        )[0]
+
+
+        # Probability
+        probabilities = None
+        confidence = None
+
+        if hasattr(
+            model,
+            "predict_proba",
+        ):
+
+            probabilities = model.predict_proba(
+                X
+            )[0]
+
+            confidence = float(
+                np.max(probabilities)
+            )
+
+
+        # Parse plant / disease
+        information = parse_class_name(
+            str(class_name)
+        )
+
+
+        predictions[model_name] = {
+
+            **information,
+
+            "confidence": confidence,
+
+            "probabilities": probabilities,
+
+        }
+
+
+    # --------------------------------------------------------
+    # RETURN EVERYTHING TO STREAMLIT
+    # --------------------------------------------------------
+
+    return {
+
+        # Original images
+        "original_rgb":
+            processed["original_rgb"],
+
+        "processed_rgb":
+            processed["resized_rgb"],
+
+
+        # LAB image
+        "lab":
+            processed["lab"],
+
+
+        # Segmentation
+        "labels":
+            segmentation["labels"],
+
+        "centers":
+            segmentation["centers"],
+
+        "background_cluster":
+            segmentation["background_cluster"],
+
+        "segmented_rgb":
+            segmentation["segmented_rgb"],
+
+        "leaf_mask":
+            segmentation["leaf_mask"],
+
+        "masked_leaf":
+            segmentation["masked_leaf"],
+
+
+        # Features
+        "feature_vector":
+            feature_vector,
+
+        "feature_names":
+            FEATURE_COLUMNS,
+
+
+        # All model predictions
+        "predictions":
+            predictions,
+
+    }
+
+
+# ============================================================
+# COMMAND LINE TEST
+# ============================================================
 
 if __name__ == "__main__":
+
     import argparse
 
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("image", type=Path)
+    parser = argparse.ArgumentParser(
+        description="Plant leaf disease prediction"
+    )
+
+    parser.add_argument(
+        "image",
+        help="Path to test image",
+    )
+
     args = parser.parse_args()
 
-    prediction = predict_image(args.image)
-    print(f"Predicted class: {prediction['class_name']}")
-    print(f"Plant: {prediction['plant']}")
-    print(f"Condition: {prediction['condition']}")
-    print(f"Status: {prediction['status']}")
+
+    result = predict_image(
+        args.image
+    )
+
+
+    print()
+    print("=" * 60)
+    print("PREDICTIONS")
+    print("=" * 60)
+
+
+    for model_name, prediction in result[
+        "predictions"
+    ].items():
+
+        print()
+        print(
+            f"{model_name}:"
+        )
+
+        print(
+            f"  Class     : "
+            f"{prediction['class_name']}"
+        )
+
+        print(
+            f"  Plant     : "
+            f"{prediction['plant']}"
+        )
+
+        print(
+            f"  Condition : "
+            f"{prediction['condition']}"
+        )
+
+        if prediction["confidence"] is not None:
+
+            print(
+                f"  Confidence: "
+                f"{prediction['confidence']:.2%}"
+            )
